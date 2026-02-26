@@ -1,0 +1,312 @@
+{
+  "name": "Rent Reminder - 3 Days Before Due",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hour"
+            }
+          ]
+        }
+      },
+      "id": "38ec25a9-1412-48e0-8626-7819f2fd5a52",
+      "name": "Daily Schedule (8 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -416,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.API_BASE_URL}}/payments/upcoming?days=3",
+        "options": {
+          "headers": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.N8N_API_KEY}}"
+            }
+          ]
+        }
+      },
+      "id": "980cd76e-1fc2-4697-9d34-34b6224dee80",
+      "name": "Fetch Payments Due in 3 Days",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -224,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.payments.length}}",
+              "operation": "larger",
+              "value2": "0"
+            }
+          ]
+        }
+      },
+      "id": "32b6ffc0-d7e4-400d-887e-4e0c8aa177ae",
+      "name": "Check if Payments Exist",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -16,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = [];\n\nfor (const payment of $input.first().json.payments) {\n  const message = `Dear ${payment.tenant_name}, your rent of KES ${payment.amount} for ${payment.property_name} is due on ${payment.due_date}. Please pay before the due date to avoid penalties.`;\n\n  items.push({\n    json: {\n      tenant_id: payment.tenant_id,\n      phone: payment.phone,\n      amount: payment.amount,\n      payment_id: payment.id,\n      message: message\n    }\n  });\n}\n\nreturn items;"
+      },
+      "id": "a997b552-7db5-4b65-94fd-38c73161b600",
+      "name": "Process Each Payment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.API_BASE_URL}}/sms/send",
+        "sendBody": true,
+        "options": {
+          "headers": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.N8N_API_KEY}}"
+            }
+          ]
+        },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "phone",
+              "value": "={{$json.phone}}"
+            },
+            {
+              "name": "message",
+              "value": "={{$json.message}}"
+            }
+          ]
+        }
+      },
+      "id": "e546c4e6-6146-44ec-8aec-02c978edb350",
+      "name": "Send SMS Reminder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        384,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.API_BASE_URL}}/reminders/log",
+        "sendBody": true,
+        "options": {
+          "headers": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.N8N_API_KEY}}"
+            }
+          ]
+        },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "tenant_id",
+              "value": "={{$json.tenant_id}}"
+            },
+            {
+              "name": "payment_id",
+              "value": "={{$json.payment_id}}"
+            },
+            {
+              "name": "reminder_type",
+              "value": "upcoming"
+            },
+            {
+              "name": "status",
+              "value": "sent"
+            },
+            {
+              "name": "status",
+              "value": "sent"
+            },
+            {
+              "name": "channel",
+              "value": "sms"
+            },
+            {
+              "name": "message",
+              "value": "{{$json.message}}"
+            },
+            {
+              "name": "automated",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "id": "5920502c-d7de-47af-ac33-3dd6cdecc63d",
+      "name": "Log Reminder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        800,
+        48
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "9ea125ab-d6ad-4337-9db9-a628269eb2d8",
+      "name": "Log No Payments",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        192,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "272cf452-94b7-4697-af2e-383a84133253",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        592,
+        64
+      ],
+      "id": "57742eee-c337-49e0-b80c-e1b8f8461e5e",
+      "name": "If"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Daily Schedule (8 AM)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Payments Due in 3 Days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Payments Due in 3 Days": {
+      "main": [
+        [
+          {
+            "node": "Check if Payments Exist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Payments Exist": {
+      "main": [
+        [
+          {
+            "node": "Process Each Payment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log No Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Each Payment": {
+      "main": [
+        [
+          {
+            "node": "Send SMS Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send SMS Reminder": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Log Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send SMS Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "5284d877-7743-4620-8fb8-a4460bfc8d7b",
+  "meta": {
+    "instanceId": "55003e2b4d3b171897e448716ab37a9f8f8f65829eb82fb8c2bba5f185d773a9"
+  },
+  "id": "iJ92nqNErab56dGG75L8e",
+  "tags": []
+}

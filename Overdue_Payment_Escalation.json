@@ -1,0 +1,337 @@
+{
+  "name": "Overdue Payment Escalation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      },
+      "id": "1e7edfac-412a-4ae4-83c8-2d0c6a20b69e",
+      "name": "Every 4 Hours Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -1008,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.API_BASE_URL}}/payments/overdue",
+        "options": {
+          "headers": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.N8N_API_KEY}}"
+            }
+          ]
+        }
+      },
+      "id": "eba5c682-7992-4570-8fbf-30685688b635",
+      "name": "Fetch Overdue Payments",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -800,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.overdue_payments.length}}",
+              "operation": "larger",
+              "value2": "0"
+            }
+          ]
+        }
+      },
+      "id": "ff4939ca-af87-45ca-8a85-7f202b35cc5c",
+      "name": "Check Overdue",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -608,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// \u2500\u2500\u2500 Categorize each overdue payment with priority + SMS message \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n//\n// Priority tiers & daily send windows (workflow runs every 4 h):\n//   high   (>= 7 days overdue) \u2192 3x/day  \u2192  08:00, 13:00, 18:00\n//   medium (>= 3 days overdue) \u2192 2x/day  \u2192  08:00, 16:00\n//   low    (<  3 days overdue) \u2192 1x/day  \u2192  08:00\n//\n// The current UTC+3 (Nairobi) hour is used to decide the allowed windows.\n// We give a \u00b11 h tolerance so a run at :00, :30, or :59 still qualifies.\n\nconst TIMEZONE_OFFSET = 3; // EAT = UTC+3\n\nconst SEND_WINDOWS = {\n  high:   [8, 13, 18],   // 3 times a day\n  medium: [8, 16],       // 2 times a day\n  low:    [8]            // 1 time  a day\n};\n\n// Current local hour in Nairobi\nconst nowUTC = new Date();\nconst localHour = (nowUTC.getUTCHours() + TIMEZONE_OFFSET) % 24;\n\n/**\n * Returns true when localHour falls within \u00b11 h of any window hour.\n * This gives resilience against scheduler drift.\n */\nfunction isInSendWindow(windows) {\n  return windows.some(w => Math.abs(localHour - w) <= 1);\n}\n\nconst items = [];\n\nfor (const payment of $input.first().json.overdue_payments) {\n  const daysOverdue = payment.days_overdue;\n\n  let priority;\n  let smsMessage;\n\n  if (daysOverdue >= 7) {\n    priority   = 'high';\n    smsMessage = `URGENT: ${payment.tenant_name}, your rent of KES ${payment.amount} is ${daysOverdue} days overdue. Immediate action required to avoid legal proceedings. Call us: ${$env.LANDLORD_PHONE ?? 'N/A'}`;\n  } else if (daysOverdue >= 3) {\n    priority   = 'medium';\n    smsMessage = `REMINDER: ${payment.tenant_name}, your rent of KES ${payment.amount} is ${daysOverdue} days overdue. Please pay now to avoid penalties.`;\n  } else {\n    priority   = 'low';\n    smsMessage = `Friendly reminder: ${payment.tenant_name}, your rent of KES ${payment.amount} is due. Please settle at your earliest convenience.`;\n  }\n\n  const shouldSend = isInSendWindow(SEND_WINDOWS[priority]);\n\n  items.push({\n    json: {\n      ...payment,\n      priority,\n      sms_message: smsMessage,\n      days_overdue: daysOverdue,\n      should_send: shouldSend,\n      send_window_hour: localHour,\n      // helpful for audit / logging\n      send_frequency_label: { high: '3x/day', medium: '2x/day', low: '1x/day' }[priority]\n    }\n  });\n}\n\nreturn items;"
+      },
+      "id": "696c8950-99a9-47f0-945f-542ddd8b8f6a",
+      "name": "Categorize & Gate by Send Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.should_send}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "In Send Window?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -192,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.API_BASE_URL}}/sms/send",
+        "sendBody": true,
+        "options": {
+          "headers": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.N8N_API_KEY}}"
+            }
+          ]
+        },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "phone",
+              "value": "={{$json.phone}}"
+            },
+            {
+              "name": "message",
+              "value": "={{$json.sms_message}}"
+            }
+          ]
+        }
+      },
+      "id": "40f5d967-af70-44e3-8ed1-43cea581e545",
+      "name": "Send SMS Reminder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        64,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.API_BASE_URL}}/reminders/log",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "tenant_id",
+              "value": "={{$json.tenant_id}}"
+            },
+            {
+              "name": "payment_id",
+              "value": "={{$json.payment_id}}"
+            },
+            {
+              "name": "reminder_type",
+              "value": "overdue"
+            },
+            {
+              "name": "priority",
+              "value": "={{$json.priority}}"
+            },
+            {
+              "name": "days_overdue",
+              "value": "={{$json.days_overdue}}"
+            },
+            {
+              "name": "send_frequency",
+              "value": "={{$json.send_frequency_label}}"
+            },
+            {
+              "name": "local_hour_sent",
+              "value": "={{$json.send_window_hour}}"
+            },
+            {
+              "name": "status",
+              "value": "sent"
+            }
+          ]
+        },
+        "options": {
+          "headers": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.N8N_API_KEY}}"
+            }
+          ]
+        }
+      },
+      "id": "57efb5d0-e3a5-4c7f-8fe6-6544c731a80f",
+      "name": "Log Overdue Reminder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        336,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.API_BASE_URL}}/reminders/log",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "tenant_id",
+              "value": "={{$json.tenant_id}}"
+            },
+            {
+              "name": "payment_id",
+              "value": "={{$json.payment_id}}"
+            },
+            {
+              "name": "reminder_type",
+              "value": "overdue_skipped"
+            },
+            {
+              "name": "priority",
+              "value": "={{$json.priority}}"
+            },
+            {
+              "name": "days_overdue",
+              "value": "={{$json.days_overdue}}"
+            },
+            {
+              "name": "local_hour_checked",
+              "value": "={{$json.send_window_hour}}"
+            },
+            {
+              "name": "status",
+              "value": "skipped_outside_window"
+            }
+          ]
+        },
+        "options": {
+          "headers": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.N8N_API_KEY}}"
+            }
+          ]
+        }
+      },
+      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "name": "Log Skipped (Outside Window)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        64,
+        320
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 4 Hours Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Overdue Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Overdue Payments": {
+      "main": [
+        [
+          {
+            "node": "Check Overdue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Overdue": {
+      "main": [
+        [
+          {
+            "node": "Categorize & Gate by Send Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Categorize & Gate by Send Window": {
+      "main": [
+        [
+          {
+            "node": "In Send Window?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "In Send Window?": {
+      "main": [
+        [
+          {
+            "node": "Send SMS Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Skipped (Outside Window)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send SMS Reminder": {
+      "main": [
+        [
+          {
+            "node": "Log Overdue Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "ba3259fe-f047-46bd-83bb-674b628bd12d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "55003e2b4d3b171897e448716ab37a9f8f8f65829eb82fb8c2bba5f185d773a9"
+  },
+  "id": "PeQNQFRMWhqTXa2_wPeJs",
+  "tags": []
+}

@@ -1,0 +1,363 @@
+{
+  "name": "AI Assistant for Tenant Queries - Streamlined",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "tenant-query",
+        "responseMode": "onReceived"
+      },
+      "id": "Webhook",
+      "name": "Webhook (Tenant Query)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://backend-ten-theta-72.vercel.app/tenants/phone/{{$json.phone}}",
+        "method": "GET"
+      },
+      "id": "FetchTenant",
+      "name": "Fetch Tenant Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.id !== undefined}}"
+            }
+          ]
+        }
+      },
+      "id": "IfTenantExists",
+      "name": "Tenant Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.landlord_available === true}}"
+            }
+          ]
+        }
+      },
+      "id": "IfLandlordAvailable",
+      "name": "Landlord Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        800,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://backend-ten-theta-72.vercel.app/ussd/tenants/{{$json.id}}/balance",
+        "method": "GET"
+      },
+      "id": "FetchBalance",
+      "name": "Fetch Current Balance",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1000,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://backend-ten-theta-72.vercel.app/properties/{{$json.property_id}}",
+        "method": "GET"
+      },
+      "id": "FetchProperty",
+      "name": "Fetch Property Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1000,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "wait"
+      },
+      "id": "MergeData",
+      "name": "Merge Balance + Property",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const tenant = $node['Fetch Tenant Details'].json;\nconst balance = $node['Fetch Current Balance'].json.balance || 0;\nconst property = $node['Fetch Property Details'].json;\n\nreturn [{\n  json: {\n    context: `Tenant: ${tenant.first_name} ${tenant.last_name}\nUnit: ${property.name} - ${tenant.unit_number}\nRent: KES ${tenant.monthly_rent}\nBalance: KES ${balance}\nProperty Address: ${property.address}`,\n    query: $node['Webhook (Tenant Query)'].json.query,\n    phone: tenant.phone,\n    tenant_id: tenant.id,\n    tenant_name: tenant.first_name,\n    balance: balance\n  }\n}];"
+      },
+      "id": "PrepareContext",
+      "name": "Prepare AI Context",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a helpful assistant for tenants. Answer clearly and concisely."
+          },
+          {
+            "role": "user",
+            "content": "={{$json.context}}\n\nTenant Question:\n{{$json.query}}"
+          }
+        ]
+      },
+      "id": "AIModel",
+      "name": "Message Model",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [
+        1600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const aiResponse = $json.choices[0].message.content;\nconst ctx = $node['Prepare AI Context'].json;\n\nlet responseType = 'general';\nconst q = ctx.query.toLowerCase();\n\nif (q.includes('maintenance') || q.includes('repair') || q.includes('fix')) {\n  responseType = 'maintenance';\n}\n\nreturn [{\n  json: {\n    phone: ctx.phone,\n    tenant_id: ctx.tenant_id,\n    response: aiResponse,\n    response_type: responseType,\n    query: ctx.query\n  }\n}];"
+      },
+      "id": "ProcessResponse",
+      "name": "Process AI Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.response_type}}",
+              "operation": "equal",
+              "value2": "maintenance"
+            }
+          ]
+        }
+      },
+      "id": "IfMaintenance",
+      "name": "Maintenance Request?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://backend-ten-theta-72.vercel.app/ussd/issue/report",
+        "method": "POST",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\"tenant_id\": $json.tenant_id, \"description\": $json.query}"
+      },
+      "id": "CreateTicket",
+      "name": "Create Maintenance Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2200,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.africastalking.com/version1/messaging",
+        "method": "POST",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\"to\": $json.phone, \"message\": $json.response}"
+      },
+      "id": "SendSMS",
+      "name": "Send SMS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2400,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook (Tenant Query)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Tenant Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Tenant Details": {
+      "main": [
+        [
+          {
+            "node": "Tenant Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tenant Exists?": {
+      "main": [
+        [
+          {
+            "node": "Landlord Available?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Landlord Available?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Fetch Current Balance",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Property Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Current Balance": {
+      "main": [
+        [
+          {
+            "node": "Merge Balance + Property",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Property Details": {
+      "main": [
+        [
+          {
+            "node": "Merge Balance + Property",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Balance + Property": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Context": {
+      "main": [
+        [
+          {
+            "node": "Message Model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message Model": {
+      "main": [
+        [
+          {
+            "node": "Process AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process AI Response": {
+      "main": [
+        [
+          {
+            "node": "Maintenance Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Maintenance Request?": {
+      "main": [
+        [
+          {
+            "node": "Create Maintenance Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Maintenance Ticket": {
+      "main": [
+        [
+          {
+            "node": "Send SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
